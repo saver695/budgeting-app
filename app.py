@@ -101,7 +101,7 @@ for table_name, item_col_name in SECTIONS:
 # --- 2. TOP ACTION BAR ---
 col1, col2 = st.columns([1, 4])
 with col1:
-    if st.button("💾 Save All Changes", type="primary", use_container_width=True):
+    if st.button("Save All Changes", type="primary", use_container_width=True):
         save_all_data()
 
 st.divider()
@@ -138,7 +138,7 @@ st.divider()
 travel_totals = render_budget_section("✈️ Travel", "travel", "Travel Destination")
 
 # --- 4. ANNUAL SUMMARY ---
-st.header("📊 Annual Summary")
+st.header("Annual Summary")
 
 summary_df = pd.DataFrame({
     "Income": income_totals,
