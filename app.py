@@ -1,31 +1,61 @@
 import streamlit as st
 import pandas as pd
+from supabase import create_client, Client
 
-# Page Configuration
+# Page Setup
 st.set_page_config(page_title="Annual Budget Tracker", layout="wide", page_icon="💵")
 st.title("Annual Budget Tracker")
 
-# Define the months for our columns
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-def init_dataframe(item_name):
-    """Initializes an empty dataframe with an item column and 12 month columns."""
-    df = pd.DataFrame(columns=[item_name] + MONTHS)
-    df.loc[0] = [""] + [0.0] * 12
+# Connect to Supabase
+@st.cache_resource
+def init_supabase() -> Client:
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+supabase = init_supabase()
+
+def load_table(table_name, item_col):
+    """Fetch rows from Supabase."""
+    response = supabase.table(table_name).select("*").order("id").execute()
+    df = pd.DataFrame(response.data)
+    
+    if df.empty:
+        df = pd.DataFrame(columns=[item_col] + MONTHS)
+        df.loc[0] = [""] + [0.0] * 12
+    else:
+        df = df.drop(columns=["id"], errors="ignore")
     return df
 
-# Initialize session state so data persists during interaction
-if "income" not in st.session_state:
-    st.session_state.income = init_dataframe("Income Source")
-    st.session_state.spending = init_dataframe("Expense Item")
-    st.session_state.savings = init_dataframe("Savings Goal")
-    st.session_state.travel = init_dataframe("Travel Destination")
+def save_table(df, table_name, item_col):
+    """Replace database table contents with updated dataframe."""
+    # Delete existing rows
+    supabase.table(table_name).delete().neq(item_col, "___DUMMY_NONE___").execute()
+    
+    # Prepare records for insertion
+    records = df.to_dict(orient="records")
+    clean_records = []
+    for r in records:
+        # Ignore completely empty rows
+        if r.get(item_col):
+            # Ensure numbers are floats
+            for m in MONTHS:
+                r[m] = float(r[m]) if r[m] else 0.0
+            clean_records.append(r)
+            
+    if clean_records:
+        supabase.table(table_name).insert(clean_records).execute()
 
-def render_budget_section(title, state_key, item_col_name):
-    """Renders a dynamic data editor for a specific budget category."""
+def render_budget_section(title, table_name, item_col_name):
     st.subheader(title)
     
-    # Configure columns to enforce dollar formatting and proper types
+    # Session state cache to minimize redundant DB calls
+    if f"data_{table_name}" not in st.session_state:
+        st.session_state[f"data_{table_name}"] = load_table(table_name, item_col_name)
+
+    # Configure columns
     col_config = {item_col_name: st.column_config.TextColumn(item_col_name, required=True)}
     for month in MONTHS:
         col_config[month] = st.column_config.NumberColumn(
@@ -35,21 +65,23 @@ def render_budget_section(title, state_key, item_col_name):
             step=10.0
         )
     
-    # Render the interactive dataframe
+    # Interactive dataframe
     edited_df = st.data_editor(
-        st.session_state[state_key],
+        st.session_state[f"data_{table_name}"],
         num_rows="dynamic",
         column_config=col_config,
         use_container_width=True,
-        key=f"editor_{state_key}"
+        key=f"editor_{table_name}"
     )
     
-    # Update state and return the monthly sums for this category
-    st.session_state[state_key] = edited_df
-    # Ensure numeric types before summing to avoid errors with empty cells
+    # Auto-save changes to Supabase
+    if not edited_df.equals(st.session_state[f"data_{table_name}"]):
+        st.session_state[f"data_{table_name}"] = edited_df
+        save_table(edited_df, table_name, item_col_name)
+    
     return pd.to_numeric(edited_df[MONTHS].sum(), errors='coerce').fillna(0)
 
-# Render sections and capture their monthly totals
+# Render sections & fetch totals
 income_totals = render_budget_section("💰 Income", "income", "Income Source")
 st.divider()
 spending_totals = render_budget_section("💸 Spending", "spending", "Expense Item")
@@ -58,7 +90,7 @@ savings_totals = render_budget_section("🏦 Savings", "savings", "Savings Goal"
 st.divider()
 travel_totals = render_budget_section("✈️ Travel", "travel", "Travel Destination")
 
-# Calculate and display the summary
+# Summary Section
 st.header("📊 Annual Summary")
 
 summary_df = pd.DataFrame({
@@ -68,7 +100,6 @@ summary_df = pd.DataFrame({
     "Travel": travel_totals
 })
 
-# Calculate net remaining cash flow per month
 summary_df["Net Remaining"] = (
     summary_df["Income"] 
     - summary_df["Spending"] 
@@ -76,7 +107,6 @@ summary_df["Net Remaining"] = (
     - summary_df["Travel"]
 )
 
-# Format the summary table for display
 st.dataframe(
     summary_df.T, 
     use_container_width=True,
