@@ -8,7 +8,6 @@ st.title("Annual Budget Tracker")
 
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-# Direct client creation without state-caching issues
 def get_supabase() -> Client:
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
@@ -29,7 +28,7 @@ def load_table(table_name, item_col):
     return df
 
 def save_all_data():
-    """Wipes and replaces database rows with what is currently on screen."""
+    """Extracts edits directly from Streamlit's data editor state and saves to Supabase."""
     supabase = get_supabase()
     SECTIONS = [
         ("income", "Income Source"),
@@ -40,30 +39,51 @@ def save_all_data():
     
     try:
         for table_name, item_col in SECTIONS:
-            # Grab current on-screen editor data
-            df = st.session_state.get(f"editor_{table_name}", {}).get("dataframe")
-            if df is None:
-                df = st.session_state[f"data_{table_name}"]
+            # Base table stored in session state
+            base_df = st.session_state[f"data_{table_name}"].copy()
+            editor_key = f"editor_{table_name}"
+            
+            # Reconstruct the edited dataframe if edits exist
+            if editor_key in st.session_state:
+                editor_state = st.session_state[editor_key]
+                
+                # Apply edited cells
+                for row_idx, updated_cols in editor_state.get("edited_rows", {}).items():
+                    for col_name, val in updated_cols.items():
+                        if row_idx < len(base_df):
+                            base_df.iat[row_idx, base_df.columns.get_loc(col_name)] = val
+
+                # Remove deleted rows
+                deleted_rows = editor_state.get("deleted_rows", [])
+                if deleted_rows:
+                    base_df = base_df.drop(index=deleted_rows).reset_index(drop=True)
+
+                # Append added rows
+                added_rows = editor_state.get("added_rows", [])
+                if added_rows:
+                    new_rows_df = pd.DataFrame(added_rows)
+                    base_df = pd.concat([base_df, new_rows_df], ignore_index=True)
 
             clean_records = []
-            for r in df.to_dict(orient="records"):
+            for r in base_df.to_dict(orient="records"):
                 item_val = r.get(item_col)
-                if item_val and str(item_val).strip() != "":
+                if pd.notnull(item_val) and str(item_val).strip() != "":
                     row_data = {item_col: str(item_val).strip()}
                     for m in MONTHS:
                         val = r.get(m, 0.0)
                         row_data[m] = float(val) if pd.notnull(val) and str(val).strip() != "" else 0.0
                     clean_records.append(row_data)
 
-            # Wipe old table entries and insert fresh ones
+            # Replace old records in Supabase
             supabase.table(table_name).delete().neq("id", -1).execute()
             if clean_records:
                 supabase.table(table_name).insert(clean_records).execute()
                 
-            # Update active state to match saved data
+            # Refresh local session state
             st.session_state[f"data_{table_name}"] = load_table(table_name, item_col)
             
         st.success("All budget changes saved successfully to Supabase!")
+        st.rerun()
     except Exception as e:
         st.error(f"Error saving budget: {e}")
 
@@ -79,7 +99,7 @@ for table_name, item_col_name in SECTIONS:
     if f"data_{table_name}" not in st.session_state:
         st.session_state[f"data_{table_name}"] = load_table(table_name, item_col_name)
 
-# --- 2. SAVE BUTTON AT TOP ---
+# --- 2. TOP ACTION BAR ---
 col1, col2 = st.columns([1, 4])
 with col1:
     if st.button("💾 Save All Changes", type="primary", use_container_width=True):
@@ -100,7 +120,6 @@ def render_budget_section(title, table_name, item_col_name):
             step=10.0
         )
     
-    # Static data editor - zero database calls until save button is pressed
     edited_df = st.data_editor(
         st.session_state[f"data_{table_name}"],
         num_rows="dynamic",
