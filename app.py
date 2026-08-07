@@ -33,30 +33,31 @@ def load_table(table_name, item_col):
     return df
 
 def save_table(df, table_name, item_col):
-    """Saves updated budget rows to Supabase cleanly."""
+    """Safely updates Supabase by validating records before modifying the database."""
     try:
-        # First, clean existing data for this table
-        supabase.table(table_name).delete().neq("id", -1).execute()
-        
-        # Prepare records for insertion
         records = df.to_dict(orient="records")
         clean_records = []
         
+        # Build clean records FIRST
         for r in records:
-            # Only save rows that have a name filled in
-            if r.get(item_col) and str(r.get(item_col)).strip() != "":
-                row_data = {item_col: str(r[item_col]).strip()}
+            item_val = r.get(item_col)
+            if item_val and str(item_val).strip() != "":
+                row_data = {item_col: str(item_val).strip()}
                 for m in MONTHS:
                     val = r.get(m, 0.0)
-                    row_data[m] = float(val) if pd.notnull(val) and val != "" else 0.0
+                    row_data[m] = float(val) if pd.notnull(val) and str(val).strip() != "" else 0.0
                 clean_records.append(row_data)
-                
+        
+        # Perform the atomic replacement only after validation
+        supabase.table(table_name).delete().neq("id", -1).execute()
+        
         if clean_records:
             supabase.table(table_name).insert(clean_records).execute()
+            
     except Exception as e:
         st.error(f"Error saving {table_name}: {e}")
 
-# --- STEP 1: LOAD ALL DATA AT STARTUP IF SESSION IS FRESH ---
+# --- 1. INITIALIZE DATA IN SESSION STATE ---
 SECTIONS = [
     ("income", "Income Source"),
     ("spending", "Expense Item"),
@@ -66,10 +67,9 @@ SECTIONS = [
 
 for table_name, item_col_name in SECTIONS:
     if f"data_{table_name}" not in st.session_state:
-        # Load directly from Supabase into session state before rendering any widget
         st.session_state[f"data_{table_name}"] = load_table(table_name, item_col_name)
 
-# --- STEP 2: RENDER BUDGET SECTIONS ---
+# --- 2. RENDER SECTIONS & PROCESS EDITS ---
 def render_budget_section(title, table_name, item_col_name):
     st.subheader(title)
     
@@ -82,7 +82,6 @@ def render_budget_section(title, table_name, item_col_name):
             step=10.0
         )
     
-    # Render data editor using pre-loaded session state
     edited_df = st.data_editor(
         st.session_state[f"data_{table_name}"],
         num_rows="dynamic",
@@ -91,14 +90,14 @@ def render_budget_section(title, table_name, item_col_name):
         key=f"editor_{table_name}"
     )
     
-    # Save back to Supabase ONLY if the user actually modified the data
+    # Save back to Supabase ONLY when edits actually occur
     if not edited_df.equals(st.session_state[f"data_{table_name}"]):
         st.session_state[f"data_{table_name}"] = edited_df
         save_table(edited_df, table_name, item_col_name)
     
     return pd.to_numeric(edited_df[MONTHS].sum(), errors='coerce').fillna(0)
 
-# Render sections & fetch totals
+# Render tables and store sums
 income_totals = render_budget_section("💰 Income", "income", "Income Source")
 st.divider()
 spending_totals = render_budget_section("💸 Spending", "spending", "Expense Item")
@@ -107,7 +106,7 @@ savings_totals = render_budget_section("🏦 Savings", "savings", "Savings Goal"
 st.divider()
 travel_totals = render_budget_section("✈️ Travel", "travel", "Travel Destination")
 
-# --- STEP 3: SUMMARY SECTION ---
+# --- 3. ANNUAL SUMMARY ---
 st.header("📊 Annual Summary")
 
 summary_df = pd.DataFrame({
