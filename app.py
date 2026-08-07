@@ -8,7 +8,7 @@ st.title("Annual Budget Tracker")
 
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-# Connect to Supabase directly without caching bugs
+# Direct client creation without state-caching issues
 def get_supabase() -> Client:
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
@@ -22,54 +22,50 @@ def load_table(table_name, item_col):
         df = pd.DataFrame()
     
     if df.empty:
-        df = pd.DataFrame(columns=["id", item_col] + MONTHS)
-        df.loc[0] = [None, ""] + [0.0] * 12
-    elif "id" not in df.columns:
-        df["id"] = None
-        
+        df = pd.DataFrame(columns=[item_col] + MONTHS)
+        df.loc[0] = [""] + [0.0] * 12
+    else:
+        df = df.drop(columns=["id"], errors="ignore")
     return df
 
-def sync_changes(table_name, item_col):
-    """Callback function that runs ONLY when a table is explicitly edited."""
-    editor_key = f"editor_{table_name}"
-    changes = st.session_state.get(editor_key, {})
+def save_all_data():
+    """Wipes and replaces database rows with what is currently on screen."""
     supabase = get_supabase()
+    SECTIONS = [
+        ("income", "Income Source"),
+        ("spending", "Expense Item"),
+        ("savings", "Savings Goal"),
+        ("travel", "Travel Destination")
+    ]
     
-    # 1. Handle Added Rows
-    for row in changes.get("added_rows", []):
-        item_val = row.get(item_col)
-        if item_val and str(item_val).strip() != "":
-            new_row = {item_col: str(item_val).strip()}
-            for m in MONTHS:
-                val = row.get(m, 0.0)
-                new_row[m] = float(val) if val else 0.0
-            supabase.table(table_name).insert(new_row).execute()
+    try:
+        for table_name, item_col in SECTIONS:
+            # Grab current on-screen editor data
+            df = st.session_state.get(f"editor_{table_name}", {}).get("dataframe")
+            if df is None:
+                df = st.session_state[f"data_{table_name}"]
 
-    # 2. Handle Edited Cells
-    edited_rows = changes.get("edited_rows", {})
-    if edited_rows:
-        current_df = st.session_state[f"data_{table_name}"]
-        for row_idx, updated_cols in edited_rows.items():
-            db_id = current_df.iloc[row_idx].get("id")
-            if pd.notnull(db_id):
-                update_payload = {}
-                for col, val in updated_cols.items():
-                    if col == item_col:
-                        update_payload[col] = str(val).strip()
-                    elif col in MONTHS:
-                        update_payload[col] = float(val) if val else 0.0
-                if update_payload:
-                    supabase.table(table_name).update(update_payload).eq("id", int(db_id)).execute()
+            clean_records = []
+            for r in df.to_dict(orient="records"):
+                item_val = r.get(item_col)
+                if item_val and str(item_val).strip() != "":
+                    row_data = {item_col: str(item_val).strip()}
+                    for m in MONTHS:
+                        val = r.get(m, 0.0)
+                        row_data[m] = float(val) if pd.notnull(val) and str(val).strip() != "" else 0.0
+                    clean_records.append(row_data)
 
-    # 3. Handle Deleted Rows
-    for row_idx in changes.get("deleted_rows", []):
-        current_df = st.session_state[f"data_{table_name}"]
-        db_id = current_df.iloc[row_idx].get("id")
-        if pd.notnull(db_id):
-            supabase.table(table_name).delete().eq("id", int(db_id)).execute()
-
-    # Reload database data into state
-    st.session_state[f"data_{table_name}"] = load_table(table_name, item_col)
+            # Wipe old table entries and insert fresh ones
+            supabase.table(table_name).delete().neq("id", -1).execute()
+            if clean_records:
+                supabase.table(table_name).insert(clean_records).execute()
+                
+            # Update active state to match saved data
+            st.session_state[f"data_{table_name}"] = load_table(table_name, item_col)
+            
+        st.success("All budget changes saved successfully to Supabase!")
+    except Exception as e:
+        st.error(f"Error saving budget: {e}")
 
 # --- 1. INITIALIZE DATA IN SESSION STATE ---
 SECTIONS = [
@@ -83,14 +79,19 @@ for table_name, item_col_name in SECTIONS:
     if f"data_{table_name}" not in st.session_state:
         st.session_state[f"data_{table_name}"] = load_table(table_name, item_col_name)
 
-# --- 2. RENDER SECTIONS ---
+# --- 2. SAVE BUTTON AT TOP ---
+col1, col2 = st.columns([1, 4])
+with col1:
+    if st.button("💾 Save All Changes", type="primary", use_container_width=True):
+        save_all_data()
+
+st.divider()
+
+# --- 3. RENDER BUDGET SECTIONS ---
 def render_budget_section(title, table_name, item_col_name):
     st.subheader(title)
     
-    col_config = {
-        "id": None,  # Hide internal ID column from view
-        item_col_name: st.column_config.TextColumn(item_col_name, required=True)
-    }
+    col_config = {item_col_name: st.column_config.TextColumn(item_col_name, required=True)}
     for month in MONTHS:
         col_config[month] = st.column_config.NumberColumn(
             month, 
@@ -99,21 +100,17 @@ def render_budget_section(title, table_name, item_col_name):
             step=10.0
         )
     
-    # Event-driven table syncing via on_change
-    st.data_editor(
+    # Static data editor - zero database calls until save button is pressed
+    edited_df = st.data_editor(
         st.session_state[f"data_{table_name}"],
         num_rows="dynamic",
         column_config=col_config,
         use_container_width=True,
-        key=f"editor_{table_name}",
-        on_change=sync_changes,
-        args=(table_name, item_col_name)
+        key=f"editor_{table_name}"
     )
     
-    df = st.session_state[f"data_{table_name}"]
-    return pd.to_numeric(df[MONTHS].sum(), errors='coerce').fillna(0)
+    return pd.to_numeric(edited_df[MONTHS].sum(), errors='coerce').fillna(0)
 
-# Render tables
 income_totals = render_budget_section("💰 Income", "income", "Income Source")
 st.divider()
 spending_totals = render_budget_section("💸 Spending", "spending", "Expense Item")
@@ -122,7 +119,7 @@ savings_totals = render_budget_section("🏦 Savings", "savings", "Savings Goal"
 st.divider()
 travel_totals = render_budget_section("✈️ Travel", "travel", "Travel Destination")
 
-# --- 3. ANNUAL SUMMARY ---
+# --- 4. ANNUAL SUMMARY ---
 st.header("📊 Annual Summary")
 
 summary_df = pd.DataFrame({
