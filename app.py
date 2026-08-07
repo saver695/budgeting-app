@@ -102,11 +102,11 @@ for table_name, item_col_name in SECTIONS:
         st.session_state[f"data_{table_name}"] = load_table(table_name, item_col_name)
 
 # --- 2. HEADER & ACTION BAR ---
-st.title("🏦 Personal Banking & Financial Dashboard")
+st.title("Banking & Financial Dashboard")
 
 col_head1, col_head2 = st.columns([4, 1])
 with col_head2:
-    if st.button("💾 Sync with Bank", type="primary", use_container_width=True):
+    if st.button("Save Changes", type="primary", use_container_width=True):
         save_all_data()
 
 st.divider()
@@ -136,11 +136,11 @@ def render_budget_section(title, table_name, item_col_name):
 
 # --- 4. TABS NAVIGATION ---
 tab_dashboard, tab_income, tab_mandatory, tab_discretionary, tab_savings = st.tabs([
-    "📊 Banking Dashboard", 
-    "💵 Income", 
-    "🛑 Mandatory Expenses", 
-    "🎯 Discretionary Expenses", 
-    "🏦 Savings & Investments"
+    "Dashboard", 
+    "Income", 
+    "Mandatory Expenses", 
+    "Discretionary Expenses", 
+    "Savings & Investments"
 ])
 
 with tab_income:
@@ -182,7 +182,7 @@ with tab_dashboard:
     col_chart1, col_chart2 = st.columns([3, 2])
 
     with col_chart1:
-        st.subheader("📈 Monthly Cash Flow Breakdown")
+        st.subheader("Monthly Cash Flow Breakdown")
         monthly_df = pd.DataFrame({
             "Income": income_totals,
             "Mandatory Spending": mandatory_totals,
@@ -192,7 +192,7 @@ with tab_dashboard:
         st.bar_chart(monthly_df, height=350)
 
     with col_chart2:
-        st.subheader("🥧 Expense Split (Mandatory vs Discretionary)")
+        st.subheader("Expense Split (Mandatory vs Discretionary)")
         if total_spending > 0:
             split_df = pd.DataFrame({
                 "Category": ["Mandatory Expenses", "Discretionary Expenses"],
