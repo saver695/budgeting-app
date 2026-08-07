@@ -33,23 +33,28 @@ def load_table(table_name, item_col):
     return df
 
 def save_table(df, table_name, item_col):
-    """Replace database table contents with updated dataframe."""
-    # Delete existing rows
-    supabase.table(table_name).delete().neq(item_col, "___DUMMY_NONE___").execute()
-    
-    # Prepare records for insertion
-    records = df.to_dict(orient="records")
-    clean_records = []
-    for r in records:
-        # Ignore completely empty rows
-        if r.get(item_col):
-            # Ensure numbers are floats
-            for m in MONTHS:
-                r[m] = float(r[m]) if r[m] else 0.0
-            clean_records.append(r)
-            
-    if clean_records:
-        supabase.table(table_name).insert(clean_records).execute()
+    """Saves updated budget rows to Supabase cleanly."""
+    try:
+        # First, clean existing data for this table
+        supabase.table(table_name).delete().neq("id", -1).execute()
+        
+        # Prepare records for insertion
+        records = df.to_dict(orient="records")
+        clean_records = []
+        
+        for r in records:
+            # Only save rows that have a name filled in
+            if r.get(item_col) and str(r.get(item_col)).strip() != "":
+                row_data = {item_col: str(r[item_col]).strip()}
+                for m in MONTHS:
+                    val = r.get(m, 0.0)
+                    row_data[m] = float(val) if pd.notnull(val) and val != "" else 0.0
+                clean_records.append(row_data)
+                
+        if clean_records:
+            supabase.table(table_name).insert(clean_records).execute()
+    except Exception as e:
+        st.error(f"Error saving {table_name}: {e}")
 
 # --- STEP 1: LOAD ALL DATA AT STARTUP IF SESSION IS FRESH ---
 SECTIONS = [
