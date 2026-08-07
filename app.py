@@ -19,8 +19,11 @@ supabase = init_supabase()
 
 def load_table(table_name, item_col):
     """Fetch rows from Supabase."""
-    response = supabase.table(table_name).select("*").order("id").execute()
-    df = pd.DataFrame(response.data)
+    try:
+        response = supabase.table(table_name).select("*").order("id").execute()
+        df = pd.DataFrame(response.data)
+    except Exception as e:
+        df = pd.DataFrame()
     
     if df.empty:
         df = pd.DataFrame(columns=[item_col] + MONTHS)
@@ -48,14 +51,23 @@ def save_table(df, table_name, item_col):
     if clean_records:
         supabase.table(table_name).insert(clean_records).execute()
 
+# --- STEP 1: LOAD ALL DATA AT STARTUP IF SESSION IS FRESH ---
+SECTIONS = [
+    ("income", "Income Source"),
+    ("spending", "Expense Item"),
+    ("savings", "Savings Goal"),
+    ("travel", "Travel Destination")
+]
+
+for table_name, item_col_name in SECTIONS:
+    if f"data_{table_name}" not in st.session_state:
+        # Load directly from Supabase into session state before rendering any widget
+        st.session_state[f"data_{table_name}"] = load_table(table_name, item_col_name)
+
+# --- STEP 2: RENDER BUDGET SECTIONS ---
 def render_budget_section(title, table_name, item_col_name):
     st.subheader(title)
     
-    # Session state cache to minimize redundant DB calls
-    if f"data_{table_name}" not in st.session_state:
-        st.session_state[f"data_{table_name}"] = load_table(table_name, item_col_name)
-
-    # Configure columns
     col_config = {item_col_name: st.column_config.TextColumn(item_col_name, required=True)}
     for month in MONTHS:
         col_config[month] = st.column_config.NumberColumn(
@@ -65,7 +77,7 @@ def render_budget_section(title, table_name, item_col_name):
             step=10.0
         )
     
-    # Interactive dataframe
+    # Render data editor using pre-loaded session state
     edited_df = st.data_editor(
         st.session_state[f"data_{table_name}"],
         num_rows="dynamic",
@@ -74,7 +86,7 @@ def render_budget_section(title, table_name, item_col_name):
         key=f"editor_{table_name}"
     )
     
-    # Auto-save changes to Supabase
+    # Save back to Supabase ONLY if the user actually modified the data
     if not edited_df.equals(st.session_state[f"data_{table_name}"]):
         st.session_state[f"data_{table_name}"] = edited_df
         save_table(edited_df, table_name, item_col_name)
@@ -90,7 +102,7 @@ savings_totals = render_budget_section("🏦 Savings", "savings", "Savings Goal"
 st.divider()
 travel_totals = render_budget_section("✈️ Travel", "travel", "Travel Destination")
 
-# Summary Section
+# --- STEP 3: SUMMARY SECTION ---
 st.header("📊 Annual Summary")
 
 summary_df = pd.DataFrame({
