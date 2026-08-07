@@ -17,7 +17,7 @@ def load_table(table_name, item_col):
         supabase = get_supabase()
         response = supabase.table(table_name).select("*").order("id").execute()
         df = pd.DataFrame(response.data)
-    except Exception as e:
+    except Exception:
         df = pd.DataFrame()
     
     if df.empty:
@@ -83,7 +83,6 @@ def save_all_data():
             st.session_state[f"data_{table_name}"] = load_table(table_name, item_col)
             
         st.success("All budget changes saved successfully to Supabase!")
-        st.rerun()
     except Exception as e:
         st.error(f"Error saving budget: {e}")
 
